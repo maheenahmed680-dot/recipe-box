@@ -1,98 +1,117 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import BoxBack from '@/assets/images/box_back.svg';
+import BoxFront from '@/assets/images/box_front.svg';
+import RecipeCard from '@/assets/images/receipe_card.svg';
+import { Dimensions, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+const { width } = Dimensions.get('window');
+const BOX_WIDTH = width * 1.2;
+const BOX_HEIGHT = BOX_WIDTH * (700 / 800);
+const CARD_WIDTH = BOX_WIDTH * 0.58;
+const CARD_HEIGHT = CARD_WIDTH * (165 / 175);
 
 export default function HomeScreen() {
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <SafeAreaView style={styles.container}>
+      <Text style={styles.title}>
+        The <Text style={styles.titleItalic}>Recipe Box</Text>
+      </Text>
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+      <View style={styles.searchBar}>
+        <Text style={styles.searchText}>Search for a recipe...</Text>
+      </View>
+
+      <View style={styles.boxWrapper}>
+        <BoxBack
+          width={BOX_WIDTH}
+          height={BOX_HEIGHT}
+          style={StyleSheet.absoluteFill}
+        />
+
+        {[4, 3, 2, 1, 0].map((i) => (
+          <RecipeCard
+            key={i}
+            width={CARD_WIDTH}
+            height={CARD_HEIGHT}
+            style={{
+              position: 'absolute',
+              top: BOX_HEIGHT * 0.22 + i * 8,
+              left: BOX_WIDTH * 0.12 + i * 6,
+            }}
+          />
+        ))}
+
+        <BoxFront
+          width={BOX_WIDTH}
+          height={BOX_HEIGHT}
+          style={StyleSheet.absoluteFill}
+          pointerEvents="none"
+        />
+      </View>
+
+      <View style={styles.nav}>
+        <Text style={styles.navArrow}>‹</Text>
+        <Text style={styles.navLabel}>Desi Food</Text>
+        <Text style={styles.navArrow}>›</Text>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  container: {
+    flex: 1,
+    backgroundColor: '#F7F0E6',
+    alignItems: 'center',
+  },
+  title: {
+    fontSize: 28,
+    color: '#2C1A0E',
+    marginTop: 16,
+    marginBottom: 16,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 20,
+  },
+  titleItalic: {
+    fontStyle: 'italic',
+    color: '#9B6240',
+  },
+  searchBar: {
+    width: '90%',
+    height: 40,
+    backgroundColor: '#EDE0CC',
+    borderRadius: 20,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 32,
+  },
+  searchText: {
+    color: '#B09070',
+    fontSize: 14,
+    fontStyle: 'italic',
+  },
+  boxWrapper: {
+    width: BOX_WIDTH,
+    height: BOX_HEIGHT,
+    position: 'relative',
+    marginTop: 20,
+    marginLeft: 30,
+  },
+  nav: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 20,
+    marginTop: 24,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  navArrow: {
+    fontSize: 28,
+    color: '#9B6240',
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  navLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2C1A0E',
+    minWidth: 100,
+    textAlign: 'center',
   },
 });
