@@ -4,9 +4,11 @@ import RecipeCard from '@/assets/images/recipe_card.svg';
 import { Grandstander_400Regular, useFonts } from '@expo-google-fonts/grandstander';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as ImageManipulator from 'expo-image-manipulator';
+import * as ImagePicker from 'expo-image-picker';
 import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
-import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Dimensions, InputAccessoryView, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import type { SharedValue } from 'react-native-reanimated';
 import Animated, {
@@ -28,6 +30,7 @@ const RECIPES = [
     title: "Healthy Banana Bread",
     cookTime: "14 mins",
     servings: "8 slices",
+    calories: '',
     pan: "8-inch round springform — line bottom with parchment, lightly grease sides.",
     ingredientGroups: [
       { group: "Dry", items: [
@@ -68,6 +71,189 @@ const RECIPES = [
     ],
   },
 ];
+
+function stripNoise(lines: string[]): string[] {
+  return lines.filter(line => {
+    const t = line.trim();
+    if (!t) return false;
+    if (/^[⸻—\-]{2,}d?$/.test(t)) return false;
+    if (/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}\s]+$/u.test(t)) return false;
+    if (/^#\w+/.test(t)) return false;
+    if (/\d+\s*(kcal|cal)|calories?/i.test(t)) return false;
+    if (/comment|follow|link in bio|dm me|sign up|subscribe|click|visit|swipe|save this|tag a/i.test(t)) return false;
+    if (/^(cutting|cooling|to eat|storage|leftovers|notes?:|tip:)/i.test(t)) return false;
+    if (/^⛔|^👉\s*(total|approx)/i.test(t)) return false;
+    if (/@\w+\s*$/.test(t)) return false;
+    if (/^⸻/.test(t)) return false;
+    if (/^(maple syrup|lemon juice|optional erythritol|vanilla sugar|erythritol|coconut sugar|erythritol):/i.test(t)) return false;
+    if (/^\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(t)) return false;
+    return true;
+  });
+}
+
+function cleanIngredientLine(line: string): string {
+  line = line.replace(/⸻/g, '').trim();
+  if (!line) return '';
+  return line
+    .replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}]+\s*/u, '')
+    .replace(/^[-•*–\t]\s*/, '')
+    .trim();
+}
+
+function isGroupHeading(line: string): boolean {
+  const t = line.trim();
+  const clean = t
+    .replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔹]+\s*/u, '')
+    .replace(/^[0-9]+[️⃣]*\s*/, '')
+    .replace(/[-•*–:]/g, '')
+    .trim();
+  if (clean.length === 0 || clean.length > 50) return false;
+  if (/^(dry|wet|sauce|marinade|batter|base|topping|filling|caramel|chocolate|mix.?in|additional|spices|homemade|add.?in)/i.test(clean)) return true;
+  if (/^(wet|dry|for the|for rice)\s/i.test(clean)) return true;
+  if (t.endsWith(':') && clean.split(' ').length >= 2 && clean.split(' ').length <= 5 && !/\d/.test(clean)) return true;
+  if (/^🔹/.test(t) && !/\d/.test(clean)) return true;
+  return false;
+}
+
+function isStepGroupHeading(line: string): boolean {
+  const t = line.trim();
+  const clean = t
+    .replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔥]+\s*/u, '')
+    .replace(/^[0-9]+[️⃣]*[\.\)]\s*/, '')
+    .trim();
+  if (/^(baking|cooling|chill|assemble|assembly|caramel|base|cream|chocolate|cut)/i.test(clean)) return true;
+  return false;
+}
+
+function findSectionIndex(lines: string[], keywords: string[]): number {
+  return lines.findIndex(l =>
+    keywords.some(k =>
+      new RegExp(`^[\\s\\W]*${k}`, 'i').test(
+        l.replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}]/gu, '')
+      )
+    )
+  );
+}
+
+function extractTitle(lines: string[]): string {
+  for (const line of lines) {
+    const clean = line
+      .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}]/gu, '')
+      .replace(/\(\d+.*?\)/g, '')
+      .replace(/[^\w\s\-'&]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (clean.length > 3) {
+      return clean.replace(/\b\w/g, c => c.toUpperCase()).trim();
+    }
+  }
+  return 'My Recipe';
+}
+
+function parseRecipeWithAI(rawText: string): Promise<any> {
+  return new Promise((resolve) => {
+    const allLines = rawText.split('\n').map(l => l.trim());
+    const lines = stripNoise(allLines);
+
+    const ingredientKeywords = ['ingredient', 'what you need', "you'll need"];
+    const stepKeywords = ['method', 'instruction', 'direction', 'how to make', 'steps', 'to make', 'to compile', 'step-by-step'];
+
+    let ingredientStart = findSectionIndex(lines, ingredientKeywords);
+    let stepStart = findSectionIndex(lines, stepKeywords);
+
+    if (ingredientStart === -1) ingredientStart = 1;
+    if (stepStart === -1) stepStart = Math.floor(lines.length / 2);
+
+    const titleLines = lines.slice(0, ingredientStart);
+    const ingredientLines = lines.slice(ingredientStart + 1, stepStart);
+    const stepLines = lines.slice(stepStart + 1);
+
+    const title = extractTitle(titleLines);
+
+    const cookTimeMatch = rawText.match(/(\d+[\-–]\d+|\d+)\s*(min|minute|hour|hr)/i);
+    const cookTime = cookTimeMatch ? `${cookTimeMatch[1]} ${cookTimeMatch[2]}s` : '';
+
+    const servingsMatch = rawText.match(/(\d+)\s*(serving|slice|portion|piece|bagel|roll|cookie|loaf|ball|square|ramekin)/i);
+    const servings = servingsMatch ? `${servingsMatch[1]} ${servingsMatch[2]}s` : '';
+
+    const calorieMatch = rawText.match(/total[:\s]*~?(\d+)\s*kcal|(\d+)\s*kcal\s*per|^~?(\d+)\s*kcal/im);
+    const calories = calorieMatch
+      ? `${calorieMatch[1] ?? calorieMatch[2] ?? calorieMatch[3]} kcal`
+      : '';
+
+    const ingredientGroups: any[] = [];
+    let currentGroup: string | null = null;
+    let currentItems: any[] = [];
+
+    for (const line of ingredientLines) {
+      if (!line.trim()) continue;
+      if (isGroupHeading(line)) {
+        if (currentItems.length > 0) {
+          ingredientGroups.push({ group: currentGroup, items: currentItems });
+          currentItems = [];
+        }
+        currentGroup = line
+          .replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔹]+\s*/u, '')
+          .replace(/:$/, '')
+          .trim();
+      } else {
+        const text = cleanIngredientLine(line);
+        if (text.length > 0) {
+          currentItems.push({ text, note: null });
+        }
+      }
+    }
+    if (currentItems.length > 0) {
+      ingredientGroups.push({ group: currentGroup, items: currentItems });
+    }
+
+    const stepGroups: any[] = [];
+    let currentStepGroup: string | null = null;
+    let currentSteps: any[] = [];
+    let stepCounter = 1;
+
+    for (const line of stepLines) {
+      if (!line.trim()) continue;
+      if (isStepGroupHeading(line)) {
+        if (currentSteps.length > 0) {
+          stepGroups.push({ group: currentStepGroup, items: currentSteps });
+          currentSteps = [];
+        }
+        currentStepGroup = line
+          .replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔥]+\s*/u, '')
+          .replace(/^[0-9]+[️⃣]*[\.\)]\s*/, '')
+          .replace(/:$/, '')
+          .trim();
+      } else {
+        const clean = line
+          .replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}]+\s*/u, '')
+          .replace(/^\d+[️⃣]*[.\)]\s*/, '')
+          .replace(/^[-–•\t]\s*/, '')
+          .trim();
+        if (clean.length > 0) {
+          currentSteps.push({ step: stepCounter++, text: clean });
+        }
+      }
+    }
+    if (currentSteps.length > 0) {
+      stepGroups.push({ group: currentStepGroup, items: currentSteps });
+    }
+
+    resolve({
+      title,
+      cookTime,
+      servings,
+      calories,
+      pan: null,
+      ingredientGroups: ingredientGroups.length > 0
+        ? ingredientGroups
+        : [{ group: null, items: ingredientLines.map(l => ({ text: cleanIngredientLine(l), note: null })).filter(i => i.text.length > 0) }],
+      stepGroups: stepGroups.length > 0
+        ? stepGroups
+        : [{ group: null, items: stepLines.map((l, i) => ({ step: i + 1, text: cleanIngredientLine(l) })).filter(i => i.text.length > 0) }],
+    });
+  });
+}
 
 // ---------- Layout constants (unchanged) ----------
 const { width } = Dimensions.get('window');
@@ -301,6 +487,10 @@ function BoxFade({ expandProgress, interactionState }: {
 export default function HomeScreen() {
   const { width: screenW, height: screenH } = useWindowDimensions();
   const [detailCard, setDetailCard] = useState<number | null>(null);
+  const [showInput, setShowInput] = useState(false);
+  const [recipeInput, setRecipeInput] = useState('');
+  const [isParsing, setIsParsing] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
   const [fontsLoaded] = useFonts({ Grandstander_400Regular });
 
   // Fan browse shared values (unchanged)
@@ -365,6 +555,92 @@ export default function HomeScreen() {
         thresholdHapticFired.value = 0;
       }
     });
+  }
+
+  async function handleParseRecipe() {
+    if (!recipeInput.trim()) return;
+    setIsParsing(true);
+    setParseError(null);
+    try {
+      const cleaned = recipeInput.replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}\u{1F300}-\u{1F9FF}\u{2700}-\u{27BF}]/gu, '').trim();
+      const parsed = await parseRecipeWithAI(cleaned);
+      console.log('PARSED:', JSON.stringify(parsed)); 
+      const newRecipe = {
+        ...parsed,
+        id: RECIPES.length,
+      };
+      RECIPES.push(newRecipe);
+      setShowInput(false);
+setIsParsing(false);
+setRecipeInput('');
+interactionState.value = EXPANDING;
+expandProgress.value = withSpring(1, EXPAND_SPRING, (finished) => {
+  if (finished) interactionState.value = FULL_SCREEN;
+});
+setDetailCard(newRecipe.id);
+    } catch (e) {
+      setParseError('Something went wrong — try again!');
+      setIsParsing(false);
+    }
+  }
+
+  async function handleCameraRoll() {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      orderedSelection: true,
+      quality: 0.1,
+      allowsEditing: false,
+      exif: false,
+      base64: false,
+    });
+
+    if (result.canceled) return;
+
+    setIsParsing(true);
+    setParseError(null);
+    try {
+      let combinedText = '';
+      for (const asset of result.assets) {
+        const resized = await ImageManipulator.manipulateAsync(
+          asset.uri,
+          [{ resize: { width: 800 } }],
+          { compress: 0.3, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        const formData = new FormData();
+        formData.append('file', {
+          uri: resized.uri,
+          type: 'image/jpeg',
+          name: 'recipe.jpg',
+        } as any);
+        formData.append('apikey', process.env.EXPO_PUBLIC_OCR_KEY ?? '');
+        formData.append('language', 'eng');
+        formData.append('isOverlayRequired', 'false');
+
+        const response = await fetch('https://api.ocr.space/parse/image', {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await response.json();
+        console.log('OCR RESULT:', JSON.stringify(data));
+        if (data?.ParsedResults?.[0]?.ParsedText) {
+          combinedText += data.ParsedResults[0].ParsedText + '\n';
+        }
+      }
+      if (combinedText.trim()) {
+        setRecipeInput(combinedText.trim());
+      } else {
+        setParseError('Could not read image — try a clearer screenshot!');
+      }
+    } catch (e) {
+      console.log('OCR ERROR:', e);
+      setParseError('Could not read image — try again!');
+    } finally {
+      setIsParsing(false);
+    }
   }
 
   // ---------- Gesture: Long Press (2s) for selection ----------
@@ -615,12 +891,13 @@ export default function HomeScreen() {
             </View>
 
             <Text style={styles.detailKitchenTag}>a recipe from my kitchen</Text>
-            <Text style={styles.detailTitle}>{CARD_NAMES[detailCard]}</Text>
+            <Text style={styles.detailTitle}>{recipe.title}</Text>
             <View style={styles.detailUnderline} />
 
             <View style={{ flexDirection: 'row', gap: 24, marginTop: 0 }}>
               <Text style={{ fontSize: 13, color: '#9B7050', fontFamily: 'Grandstander_400Regular', lineHeight: 32 }}>⏱ {recipe.cookTime}</Text>
               <Text style={{ fontSize: 13, color: '#9B7050', fontFamily: 'Grandstander_400Regular', lineHeight: 32 }}>🍽 {recipe.servings}</Text>
+              {recipe.calories ? <Text style={{ fontSize: 13, color: '#9B7050', fontFamily: 'Grandstander_400Regular', lineHeight: 32 }}>🔥 {recipe.calories}</Text> : null}
             </View>
 
             {recipe.pan && (
@@ -665,7 +942,7 @@ export default function HomeScreen() {
       )}
 
       <Pressable
-        onPress={() => {}}
+        onPress={() => setShowInput(true)}
         style={{
           position: 'absolute',
           bottom: 32,
@@ -679,7 +956,7 @@ export default function HomeScreen() {
           borderRadius: 100,
           paddingVertical: 10,
           paddingHorizontal: 16,
-          zIndex: 300,
+          zIndex: detailCard !== null ? -1 : 300,
         }}
       >
         <Text style={{
@@ -692,6 +969,116 @@ export default function HomeScreen() {
           color: '#6E3D1E',
         }}>+</Text>
       </Pressable>
+
+      {showInput && (
+        <Animated.View style={{
+          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: '#F7F0E6', zIndex: 400,
+        }}>
+          <Pressable
+            onPress={() => setShowInput(false)}
+            style={{
+              position: 'absolute', top: 56, right: 16,
+              width: 32, height: 32, borderRadius: 16,
+              backgroundColor: '#E8DDD0',
+              alignItems: 'center', justifyContent: 'center',
+              zIndex: 10,
+            }}
+          >
+            <Text style={{ fontSize: 20, color: '#2C1A0E', lineHeight: 22 }}>×</Text>
+          </Pressable>
+          <ScrollView
+            contentContainerStyle={{ paddingTop: 80, paddingHorizontal: 24, paddingBottom: 60 }}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+          >
+            <Text style={{
+              fontFamily: 'Grandstander_400Regular', fontSize: 32,
+              color: '#9B7050', fontStyle: 'italic', lineHeight: 32,
+            }}>Add a new recipe</Text>
+
+            <View style={{ height: 2, width: '80%', backgroundColor: '#E8A090', marginBottom: 8 }} />
+
+            <Text style={{
+              fontFamily: 'Grandstander_400Regular', fontSize: 14,
+              color: '#9B7050', lineHeight: 22, marginBottom: 24,
+            }}>Paste messy notes, type, snap a photo or use your voice, AI will turn it into a cute recipe card </Text>
+
+            <View style={{
+              backgroundColor: '#FFFFFF', borderRadius: 16,
+              padding: 16, height: 300, overflow: 'hidden',
+              shadowColor: '#6c6c6c', shadowOpacity: 0.08,
+              shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+            }}>
+              <TextInput
+                multiline
+                placeholder="Paste or type your recipe here — messy notes are totally fine..."
+                placeholderTextColor="#C4A882"
+                value={recipeInput}
+                onChangeText={setRecipeInput}
+                inputAccessoryViewID="recipe-input"
+                style={{
+                  fontFamily: 'Grandstander_400Regular', fontSize: 15,
+                  color: '#3D2000', lineHeight: 24, flex: 1,
+                  textAlignVertical: 'top',
+                }}
+              />
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 16, marginTop: 8 }}>
+                <Feather name="maximize-2" size={18} color="#C4A882" style={{ marginRight: 'auto' }} />
+                <Feather name="mic" size={20} color="#9B7050" />
+                <Pressable onPress={handleCameraRoll}>
+                  <Feather name="camera" size={20} color="#9B7050" />
+                </Pressable>
+              </View>
+            </View>
+
+            <Pressable
+              onPress={handleParseRecipe}
+              style={{
+                marginTop: 24,
+                backgroundColor: recipeInput.trim().length > 0 ? '#D4776A' : '#E8C4BC',
+                borderRadius: 100,
+                paddingVertical: 14,
+                alignItems: 'center',
+              }}>
+              <Text style={{
+                fontFamily: 'Grandstander_400Regular',
+                fontSize: 16,
+                color: '#FFFFFF',
+              }}>
+                {isParsing ? 'Making your card...' : 'Make my recipe card →'}
+              </Text>
+            </Pressable>
+            {parseError && (
+              <Text style={{
+                fontFamily: 'Grandstander_400Regular',
+                fontSize: 14,
+                color: '#E8A090',
+                textAlign: 'center',
+                marginTop: 12,
+              }}>{parseError}</Text>
+            )}
+          </ScrollView>
+          <InputAccessoryView nativeID="recipe-input">
+            <View style={{
+              backgroundColor: '#F7F0E6',
+              paddingHorizontal: 16,
+              paddingVertical: 8,
+              alignItems: 'flex-end',
+              borderTopWidth: 1,
+              borderTopColor: 'rgba(110,61,30,0.1)',
+            }}>
+              <Pressable onPress={() => Keyboard.dismiss()}>
+                <Text style={{
+                  fontFamily: 'Grandstander_400Regular',
+                  fontSize: 16,
+                  color: '#6E3D1E',
+                }}>Done</Text>
+              </Pressable>
+            </View>
+          </InputAccessoryView>
+        </Animated.View>
+      )}
     </SafeAreaView>
   );
 }
