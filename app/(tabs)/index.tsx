@@ -3,11 +3,12 @@ import BoxFront from '@/assets/images/box_front.svg';
 import RecipeCard from '@/assets/images/recipe_card.svg';
 import { Grandstander_400Regular, useFonts } from '@expo-google-fonts/grandstander';
 import { Feather } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Dimensions, InputAccessoryView, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import type { SharedValue } from 'react-native-reanimated';
@@ -24,53 +25,27 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-const RECIPES = [
-  {
-    id: 0,
-    title: "Healthy Banana Bread",
-    cookTime: "14 mins",
-    servings: "8 slices",
-    calories: '',
-    pan: "8-inch round springform — line bottom with parchment, lightly grease sides.",
-    ingredientGroups: [
-      { group: "Dry", items: [
-        { text: "¾ cup oat flour", note: "blend oats first if needed" },
-        { text: "¼ tsp baking powder" },
-        { text: "⅛ tsp baking soda" },
-        { text: "Pinch of salt" },
-        { text: "Cinnamon (optional)" },
-      ]},
-      { group: "Wet", items: [
-        { text: "2 medium bananas", note: "even if ripe, roast till mostly black in the oven every time — trust me!" },
-        { text: "Dates 6 – 1 tbsp date paste" },
-        { text: "2 eggs" },
-        { text: "1 tbsp maple syrup (with dates: ½ tbsp)" },
-        { text: "1 tbsp erythritol (to taste)" },
-        { text: "1 tbsp coconut sugar" },
-        { text: "1 tbsp vanilla extract" },
-      ]},
-      { group: "Chocolate", items: [
-        { text: "1½ tbsp milk chocolate chips (~18–20g total)" },
-      ]},
-    ],
-    stepGroups: [
-      { group: null, items: [
-        { step: 1, text: "Blend dry first — pulse oats to flour, add baking powder, soda, salt, cinnamon. Pulse until mixed." },
-        { step: 2, text: "Add wet on top — banana, eggs, maple syrup, erythritol, vanilla." },
-        { step: 3, text: "Pulse gently — 5–6 short pulses ONLY. Stop as soon as smooth." },
-        { step: 4, text: "Rest batter 10 minutes. May stay runny — that's OK." },
-        { step: 5, text: "Add chocolate — mix ½ tbsp into batter, sprinkle 1 tbsp on top." },
-        { step: 6, text: "Pour into pan." },
-      ]},
-      { group: "Baking", items: [
-        { text: "170°C fan" },
-        { text: "14 minutes ONLY" },
-        { text: "Edges set, center soft" },
-        { text: "Toothpick = moist crumbs" },
-      ]},
-    ],
-  },
-];
+const RECIPES: any[] = [];
+
+const STORAGE_KEY = 'recipebox_recipes';
+
+async function saveRecipes(recipes: typeof RECIPES) {
+  try {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(recipes));
+  } catch (e) {
+    console.log('Save error:', e);
+  }
+}
+
+async function loadRecipes(): Promise<typeof RECIPES> {
+  try {
+    const stored = await AsyncStorage.getItem(STORAGE_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch (e) {
+    console.log('Load error:', e);
+  }
+  return RECIPES;
+}
 
 function stripNoise(lines: string[]): string[] {
   return lines.filter(line => {
@@ -87,6 +62,30 @@ function stripNoise(lines: string[]): string[] {
     if (/^⸻/.test(t)) return false;
     if (/^(maple syrup|lemon juice|optional erythritol|vanilla sugar|erythritol|coconut sugar|erythritol):/i.test(t)) return false;
     if (/^\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(t)) return false;
+if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d/i.test(t)) return false;
+if (/^\d{1,2}\s+\w+\s+\d{4}$/.test(t)) return false;
+    // Status bar OCR artifacts
+    if (/^\d+:\d+/.test(t) || /^\d+%/.test(t)) return false;
+    // Instagram/Pinterest chrome
+    if (/^(All posts|Saved|Following|Visit site|ASMR)$/i.test(t)) return false;
+    // Engagement count lines (e.g. "4.2K  1,234  892")
+    if (/[\d.]+K\s+[\d,]+\s+[\d.]+K/.test(t)) return false;
+    // "Liked by X and others"
+    if (/liked by .+ and others/i.test(t)) return false;
+    // Promo CTA sentences
+    if (/DM you|drop me a follow|comment.{0,30}and I will|cookbook|meal prep/i.test(t)) return false;
+    // Transition / caption hook lines (exact)
+    if (/^(The recipe|Recipe below|The recipe ⬇️)$/i.test(t)) return false;
+    // Comparison hook lines
+    if (/\w+\s*=\s*\d+.*calories/i.test(t)) return false;
+    // Closing social plugs
+    if (/follow.*(week|journey|gang)/i.test(t)) return false;
+    // Pinterest chrome
+    if (/\d+k followers/i.test(t) || /monthly views/i.test(t)) return false;
+    // Domain-only lines (e.g. "example.com")
+    if (/^\w+\.\w+$/.test(t)) return false;
+    // Nav bar garbage: under 4 chars with no letters
+    if (t.length < 4 && !/[a-zA-Z]/.test(t)) return false;
     return true;
   });
 }
@@ -100,28 +99,49 @@ function cleanIngredientLine(line: string): string {
     .trim();
 }
 
+function isNotesHeading(line: string): boolean {
+  const t = line.replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}]/gu, '').trim();
+  return /macros|nutrition|additional notes|freezing instructions|reheating instructions|storage/i.test(t);
+}
+
 function isGroupHeading(line: string): boolean {
   const t = line.trim();
-  const clean = t
-    .replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔹]+\s*/u, '')
+  // Full emoji strip for all checks
+  const noEmoji = t.replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔹🔥]/gu, '').trim();
+  const clean = noEmoji
     .replace(/^[0-9]+[️⃣]*\s*/, '')
     .replace(/[-•*–:]/g, '')
     .trim();
-  if (clean.length === 0 || clean.length > 50) return false;
+  if (clean.length === 0 || noEmoji.length > 60) return false;
+  // Notes/nutrition headings are handled separately
+  if (isNotesHeading(line)) return false;
+  // Existing specific-word patterns (kept)
   if (/^(dry|wet|sauce|marinade|batter|base|topping|filling|caramel|chocolate|mix.?in|additional|spices|homemade|add.?in)/i.test(clean)) return true;
   if (/^(wet|dry|for the|for rice)\s/i.test(clean)) return true;
-  if (t.endsWith(':') && clean.split(' ').length >= 2 && clean.split(' ').length <= 5 && !/\d/.test(clean)) return true;
   if (/^🔹/.test(t) && !/\d/.test(clean)) return true;
+  // New explicit patterns
+  if (/^Ingredients\s*\([^)]+\)\s*[^\w]*:$/i.test(noEmoji)) return true;
+  if (/^For the .+:$/i.test(noEmoji)) return true;
+  // Stricter colon-based check (replaces old generic one)
+  if (!t.endsWith(':')) return false;
+  if (/^[\d¼½¾⅓⅔⅛]/.test(clean)) return false;
+  if (/^(Melt|Mix|Cook|Marinate|Pour|Add|Bake|Whisk|Stir|Combine|Fry|Boil|Heat|Blend)\b/i.test(clean)) return false;
+  if (clean.split(' ').length >= 2 && clean.split(' ').length <= 8 && !/\d/.test(clean)) return true;
   return false;
 }
 
 function isStepGroupHeading(line: string): boolean {
   const t = line.trim();
-  const clean = t
-    .replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔥]+\s*/u, '')
+  const noEmoji = t.replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔥]/gu, '').trim();
+  const clean = noEmoji
     .replace(/^[0-9]+[️⃣]*[\.\)]\s*/, '')
     .trim();
   if (/^(baking|cooling|chill|assemble|assembly|caramel|base|cream|chocolate|cut)/i.test(clean)) return true;
+  if (/^(how to make|how to cook|to make|to compile)/i.test(clean)) return true;
+  if (/^(Marinate|Cook in|Pour in|Mix in)/i.test(clean)) return true;
+  if (/^(Freezing|Reheating|Storage|Serving)\s+Instructions/i.test(clean)) return true;
+  // Dash-prefixed short lines with no quantity → step sub-heading
+  if (/^-/.test(noEmoji) && noEmoji.length < 35 && !/\d/.test(noEmoji)) return true;
   return false;
 }
 
@@ -136,23 +156,55 @@ function findSectionIndex(lines: string[], keywords: string[]): number {
 }
 
 function extractTitle(lines: string[]): string {
-  for (const line of lines) {
-    const clean = line
+  function stripHandle(l: string): string {
+  // Remove leading @handle or username (word with no spaces) at start
+  return l.replace(/^@?\w+\s+/, '').trim();
+}
+  function cleanLine(l: string): string {
+    return l
       .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}]/gu, '')
       .replace(/\(\d+.*?\)/g, '')
       .replace(/[^\w\s\-'&]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+  // Priority 0: first line with a handle prefix — strip it and use remainder
+  for (const line of lines) {
+    const stripped = stripHandle(line);
+    const clean = cleanLine(stripped);
+    if (clean.length > 5 && !/^\d/.test(clean) && !/^Q\s*\d/.test(clean)) {
+      return clean.replace(/\b\w/g, c => c.toUpperCase()).trim();
+    }
+  }
+  // Priority 1: line containing "recipe" with proper casing (not all-caps noise)
+  for (const line of lines) {
+    const clean = cleanLine(stripHandle(line));
+    if (clean.length > 3 && /recipe/i.test(clean) && clean !== clean.toUpperCase()) {
+      return clean.replace(/\b\w/g, c => c.toUpperCase()).trim();
+    }
+  }
+  // Priority 2: first ALL CAPS line
+  for (const line of lines) {
+    const clean = cleanLine(stripHandle(line));
+    if (clean.length > 3 && /[A-Z]/.test(clean) && clean === clean.toUpperCase()) {
+      return clean.replace(/\b\w/g, c => c.toUpperCase()).trim();
+    }
+  }
+  // Priority 3: first non-empty line
+  for (const line of lines) {
+    const clean = cleanLine(stripHandle(line));
     if (clean.length > 3) {
       return clean.replace(/\b\w/g, c => c.toUpperCase()).trim();
     }
   }
-  return 'My Recipe';
+  return 'Untitled Recipe';
 }
 
 function parseRecipeWithAI(rawText: string): Promise<any> {
   return new Promise((resolve) => {
-    const allLines = rawText.split('\n').map(l => l.trim());
+    // Pre-process: strip asterisk emphasis and normalise en-dash to hyphen
+    const processedText = rawText.replace(/\*(\w)/g, '$1').replace(/–/g, '-');
+    const allLines = processedText.split('\n').map(l => l.trim());
     const lines = stripNoise(allLines);
 
     const ingredientKeywords = ['ingredient', 'what you need', "you'll need"];
@@ -181,21 +233,35 @@ function parseRecipeWithAI(rawText: string): Promise<any> {
       ? `${calorieMatch[1] ?? calorieMatch[2] ?? calorieMatch[3]} kcal`
       : '';
 
+    const notes: string[] = [];
     const ingredientGroups: any[] = [];
     let currentGroup: string | null = null;
     let currentItems: any[] = [];
+    let collectingNotes = false;
 
     for (const line of ingredientLines) {
       if (!line.trim()) continue;
+      if (isNotesHeading(line)) {
+        if (currentItems.length > 0) {
+          ingredientGroups.push({ group: currentGroup, items: currentItems });
+          currentItems = [];
+        }
+        collectingNotes = true;
+        continue;
+      }
       if (isGroupHeading(line)) {
+        collectingNotes = false;
         if (currentItems.length > 0) {
           ingredientGroups.push({ group: currentGroup, items: currentItems });
           currentItems = [];
         }
         currentGroup = line
-          .replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔹]+\s*/u, '')
+          .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔹]/gu, '')
           .replace(/:$/, '')
           .trim();
+      } else if (collectingNotes) {
+        const text = cleanIngredientLine(line);
+        if (text.length > 0) notes.push(text);
       } else {
         const text = cleanIngredientLine(line);
         if (text.length > 0) {
@@ -211,19 +277,23 @@ function parseRecipeWithAI(rawText: string): Promise<any> {
     let currentStepGroup: string | null = null;
     let currentSteps: any[] = [];
     let stepCounter = 1;
+    let collectingStepNotes = false;
 
     for (const line of stepLines) {
       if (!line.trim()) continue;
       if (isStepGroupHeading(line)) {
+        const headingText = line
+          .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔥]/gu, '')
+          .replace(/^[0-9]+[️⃣]*[\.\)]\s*/, '')
+          .replace(/:$/, '')
+          .trim();
+        const isNoteGroup = /^(Freezing|Reheating|Storage|Serving)\s+Instructions/i.test(headingText);
         if (currentSteps.length > 0) {
           stepGroups.push({ group: currentStepGroup, items: currentSteps });
           currentSteps = [];
         }
-        currentStepGroup = line
-          .replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}🔥]+\s*/u, '')
-          .replace(/^[0-9]+[️⃣]*[\.\)]\s*/, '')
-          .replace(/:$/, '')
-          .trim();
+        collectingStepNotes = isNoteGroup;
+        currentStepGroup = headingText;
       } else {
         const clean = line
           .replace(/^[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}]+\s*/u, '')
@@ -231,7 +301,11 @@ function parseRecipeWithAI(rawText: string): Promise<any> {
           .replace(/^[-–•\t]\s*/, '')
           .trim();
         if (clean.length > 0) {
-          currentSteps.push({ step: stepCounter++, text: clean });
+          if (collectingStepNotes) {
+            notes.push(clean);
+          } else {
+            currentSteps.push({ step: stepCounter++, text: clean });
+          }
         }
       }
     }
@@ -245,6 +319,7 @@ function parseRecipeWithAI(rawText: string): Promise<any> {
       servings,
       calories,
       pan: null,
+      notes,
       ingredientGroups: ingredientGroups.length > 0
         ? ingredientGroups
         : [{ group: null, items: ingredientLines.map(l => ({ text: cleanIngredientLine(l), note: null })).filter(i => i.text.length > 0) }],
@@ -435,6 +510,8 @@ function AnimatedCard({
     return { opacity: isUnlocked.value * isFocused };
   });
 
+  const displayName = recipeName.split(' ').map((w: string) => w.length > 1 && w === w.toUpperCase() ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w).join(' ');
+
   return (
     <Animated.View
       ref={cardRef}
@@ -456,9 +533,63 @@ function AnimatedCard({
       <Animated.View style={[styles.tooltip, tooltipStyle]}>
         <Text style={styles.tooltipText}>{recipeName}</Text>
       </Animated.View>
-      <View style={{ width: CARD_WIDTH, height: CARD_HEIGHT }}>
+      <View style={{ width: CARD_WIDTH, height: CARD_HEIGHT, overflow: 'hidden' }}>
         <RecipeCard width={CARD_WIDTH} height={CARD_HEIGHT} />
-        <Text style={styles.cardLabel}>{recipeName}</Text>
+        <View style={{
+  position: 'absolute',
+  top: 40,
+  left: CARD_WIDTH * 0.14,
+  width: CARD_WIDTH * 0.72,
+  alignSelf: 'center',
+  alignItems: 'center',
+  transform: [{ rotate: '12deg' }],
+}}>
+  <Text style={{
+    fontFamily: 'Grandstander_400Regular',
+    fontSize: 12,
+    color: '#6E3D1E',
+    textAlign: 'center',
+    flexWrap: 'wrap',
+  }} numberOfLines={2}>{displayName}</Text>
+</View>
+        {(() => {
+          const cardRecipe = RECIPES.find(r => r.id === cardIndex);
+          const previewLines = cardRecipe
+            ? cardRecipe.ingredientGroups
+                .flatMap((g: any) => g.items)
+                .slice(0, 4)
+                .map((item: any) => item.text as string)
+            : [
+                'cup flour',
+                'tbsp butter',
+                'eggs',
+                'tsp vanilla',
+              ];
+          return (
+            <View style={{
+              position: 'absolute',
+              top: CARD_HEIGHT * 0.25,
+              left: CARD_WIDTH * 0.25,
+              right: CARD_WIDTH * 0.35,
+              transform: [{ rotate: '12deg' }],
+            }}>
+              {previewLines.map((line: string, i: number) => (
+                <Text
+                  key={i}
+                  numberOfLines={1}
+                  style={{
+                    fontFamily: 'Grandstander_400Regular',
+                    fontSize: 8,
+                    color: 'rgba(110, 61, 30, 0.6)',
+                    lineHeight: 15,
+                  }}
+                >
+                  {line}
+                </Text>
+              ))}
+            </View>
+          );
+        })()}
       </View>
     </Animated.View>
   );
@@ -491,7 +622,15 @@ export default function HomeScreen() {
   const [recipeInput, setRecipeInput] = useState('');
   const [isParsing, setIsParsing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [recipes, setRecipes] = useState(RECIPES);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedRecipe, setEditedRecipe] = useState<any>(null);
+  const [currentRecipe, setCurrentRecipe] = useState<any>(null);
   const [fontsLoaded] = useFonts({ Grandstander_400Regular });
+
+  useEffect(() => {
+    loadRecipes().then(loaded => setRecipes(loaded));
+  }, []);
 
   // Fan browse shared values (unchanged)
   const isUnlocked = useSharedValue(0);
@@ -536,7 +675,11 @@ export default function HomeScreen() {
   }
 
   function showDetail(index: number) {
-    setDetailCard(index);
+    const r = [...recipes].reverse()[index];
+    if (r) {
+      setDetailCard(r.id);
+      setCurrentRecipe(r);
+    }
   }
 
   function hideDetail() {
@@ -547,6 +690,9 @@ export default function HomeScreen() {
     interactionState.value = COLLAPSING;
     pullY.value = 0;
     hideDetail();
+    setCurrentRecipe(null);
+    setIsEditing(false);
+    setEditedRecipe(null);
     expandProgress.value = withSpring(0, EXPAND_SPRING, (finished) => {
       if (finished) {
         interactionState.value = FANNED;
@@ -565,19 +711,24 @@ export default function HomeScreen() {
       const cleaned = recipeInput.replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}\u{1F300}-\u{1F9FF}\u{2700}-\u{27BF}]/gu, '').trim();
       const parsed = await parseRecipeWithAI(cleaned);
       console.log('PARSED:', JSON.stringify(parsed)); 
+      const newId = Date.now();
       const newRecipe = {
         ...parsed,
-        id: RECIPES.length,
+        id: newId,
       };
-      RECIPES.push(newRecipe);
+      const updatedRecipes = [...recipes, newRecipe];
+      setRecipes(updatedRecipes);
+      saveRecipes(updatedRecipes);
       setShowInput(false);
-setIsParsing(false);
-setRecipeInput('');
-interactionState.value = EXPANDING;
-expandProgress.value = withSpring(1, EXPAND_SPRING, (finished) => {
-  if (finished) interactionState.value = FULL_SCREEN;
-});
-setDetailCard(newRecipe.id);
+      setIsParsing(false);
+      setRecipeInput('');
+      setIsEditing(true);
+      setEditedRecipe(newRecipe);
+      setDetailCard(newId);
+      interactionState.value = EXPANDING;
+      expandProgress.value = withSpring(1, EXPAND_SPRING, (finished) => {
+        if (finished) interactionState.value = FULL_SCREEN;
+      });
     } catch (e) {
       setParseError('Something went wrong — try again!');
       setIsParsing(false);
@@ -782,7 +933,27 @@ setDetailCard(newRecipe.id);
 
   const composed = Gesture.Simultaneous(longPress, fanActivate, pan);
 
-  const recipe = RECIPES.find(r => r.id === (detailCard ?? 0)) ?? RECIPES[0];
+  const recipe = editedRecipe ?? currentRecipe ?? recipes.find(r => r.id === detailCard) ?? null;
+
+  function startEditing() {
+    setEditedRecipe(JSON.parse(JSON.stringify(recipe)));
+    setIsEditing(true);
+  }
+
+  function saveEditedRecipe() {
+    const updatedRecipes = recipes.map(r =>
+      r.id === editedRecipe.id ? editedRecipe : r
+    );
+    setRecipes(updatedRecipes);
+    saveRecipes(updatedRecipes);
+    setIsEditing(false);
+    setEditedRecipe(null);
+  }
+
+  function discardEdits() {
+    setIsEditing(false);
+    setEditedRecipe(null);
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -825,7 +996,7 @@ setDetailCard(newRecipe.id);
             <AnimatedCard
               key={i}
               cardIndex={i}
-              recipeName={CARD_NAMES[i]}
+              recipeName={[...recipes].reverse()[i]?.title ?? CARD_NAMES[i]}
               isUnlocked={isUnlocked}
               dragX={dragX}
               interactionState={interactionState}
@@ -875,7 +1046,7 @@ setDetailCard(newRecipe.id);
       </View>
 
       {/* Detail content overlay (swapped in via runOnJS) */}
-      {detailCard !== null && (
+      {detailCard !== null && recipe && (
         <Animated.View style={[styles.detailOverlay, detailOverlayStyle]}>
           {/* Close button */}
           <Pressable style={styles.closeButton} onPress={dismissDetail} hitSlop={8}>
@@ -890,8 +1061,43 @@ setDetailCard(newRecipe.id);
               ))}
             </View>
 
+            {!isEditing ? (
+              <Pressable
+                onPress={startEditing}
+                style={{
+                  position: 'absolute', top: -40, left: 0,
+                  flexDirection: 'row', alignItems: 'center', gap: 6,
+                }}
+              >
+                <Feather name="edit-2" size={14} color="#9B7050" />
+                <Text style={{ fontFamily: 'Grandstander_400Regular',
+                fontSize: 13, color: '#9B7050' }}>Edit</Text>
+              </Pressable>
+            ) : (
+              <View style={{ position: 'absolute', top: -40, left: 0,
+                flexDirection: 'row', gap: 16 }}>
+                <Pressable onPress={saveEditedRecipe}>
+                  <Text style={{ fontFamily: 'Grandstander_400Regular',
+                  fontSize: 13, color: '#6E3D1E', fontWeight: '600' }}>
+                    Save to my box ✓</Text>
+                </Pressable>
+                <Pressable onPress={discardEdits}>
+                  <Text style={{ fontFamily: 'Grandstander_400Regular',
+                  fontSize: 13, color: '#9B7050' }}>Discard</Text>
+                </Pressable>
+              </View>
+            )}
             <Text style={styles.detailKitchenTag}>a recipe from my kitchen</Text>
-            <Text style={styles.detailTitle}>{recipe.title}</Text>
+            {isEditing ? (
+              <TextInput
+                value={editedRecipe.title}
+                onChangeText={t => setEditedRecipe({...editedRecipe, title: t})}
+                style={[styles.detailTitle, { borderBottomWidth: 1,
+                borderBottomColor: '#E8A090' }]}
+              />
+            ) : (
+              <Text style={styles.detailTitle}>{recipe.title}</Text>
+            )}
             <View style={styles.detailUnderline} />
 
             <View style={{ flexDirection: 'row', gap: 24, marginTop: 0 }}>
@@ -913,7 +1119,23 @@ setDetailCard(newRecipe.id);
                 <Text style={{ fontSize: 14, color: '#9B7050', fontStyle: 'italic', marginTop: 16, fontFamily: 'Grandstander_400Regular', lineHeight: 32 }}>{grp.group}</Text>
                 {grp.items.map((item, ii) => (
                   <View key={ii}>
-                    <Text style={{ fontSize: 15, color: '#3D2000', marginBottom: 0, fontFamily: 'Grandstander_400Regular', lineHeight: 32 }}>• {item.text}</Text>
+                    {isEditing ? (
+                      <TextInput
+                        value={item.text}
+                        onChangeText={t => {
+                          const updated = JSON.parse(JSON.stringify(editedRecipe));
+                          updated.ingredientGroups[gi].items[ii].text = t;
+                          setEditedRecipe(updated);
+                        }}
+                        style={{ fontSize: 15, color: '#3D2000',
+                        fontFamily: 'Grandstander_400Regular', lineHeight: 32,
+                        borderBottomWidth: 1, borderBottomColor: '#E8A090' }}
+                      />
+                    ) : (
+                      <Text style={{ fontSize: 15, color: '#3D2000', marginBottom: 0,
+                      fontFamily: 'Grandstander_400Regular', lineHeight: 32 }}>
+                      • {item.text}</Text>
+                    )}
                     {item.note && (
                       <View style={{ borderLeftWidth: 2, borderLeftColor: '#E8A090', paddingLeft: 10, marginTop: 2, marginBottom: 0 }}>
                         <Text style={{ fontSize: 13, color: '#9B7050', fontStyle: 'italic', fontFamily: 'Grandstander_400Regular', lineHeight: 32 }}>{item.note}</Text>
@@ -930,11 +1152,28 @@ setDetailCard(newRecipe.id);
                 {grp.group && (
                   <Text style={{ fontSize: 14, color: '#9B7050', fontStyle: 'italic', marginTop: 16, fontFamily: 'Grandstander_400Regular', lineHeight: 32 }}>{grp.group}</Text>
                 )}
-                {grp.items.map((item, ii) => (
-                  <Text key={ii} style={{ fontSize: 15, color: '#3D2000', marginBottom: 0, fontFamily: 'Grandstander_400Regular', lineHeight: 32 }}>
-                    {'step' in item ? `${item.step}. ${item.text}` : `• ${item.text}`}
-                  </Text>
-                ))}
+                {grp.items.map((item, ii) =>
+                  isEditing ? (
+                    <TextInput
+                      key={ii}
+                      value={item.text}
+                      onChangeText={t => {
+                        const updated = JSON.parse(JSON.stringify(editedRecipe));
+                        updated.stepGroups[gi].items[ii].text = t;
+                        setEditedRecipe(updated);
+                      }}
+                      multiline
+                      style={{ fontSize: 15, color: '#3D2000',
+                      fontFamily: 'Grandstander_400Regular', lineHeight: 32,
+                      borderBottomWidth: 1, borderBottomColor: '#E8A090' }}
+                    />
+                  ) : (
+                    <Text key={ii} style={{ fontSize: 15, color: '#3D2000',
+                    marginBottom: 0, fontFamily: 'Grandstander_400Regular', lineHeight: 32 }}>
+                      {'step' in item ? `${item.step}. ${item.text}` : `• ${item.text}`}
+                    </Text>
+                  )
+                )}
               </View>
             ))}
           </ScrollView>
@@ -1146,8 +1385,8 @@ const styles = StyleSheet.create({
   cardLabel: {
     position: 'absolute',
     top: 40,
-    left: 6,
-    width: CARD_WIDTH,
+    left: CARD_WIDTH * 0.1,
+    right: CARD_WIDTH * 0.1,
     textAlign: 'center',
     fontFamily: 'Grandstander_400Regular',
     fontSize: 12,
