@@ -1,50 +1,53 @@
-# Welcome to your Expo app 👋
+RecipeBox
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A digital version of a grandmother's wooden recipe card index box. Warm, tactile and nostalgic. Flip through a fanned stack of recipe cards, pull one out to read it, and add new recipes by photo, voice or typing.
 
-## Get started
+Built with React Native and Expo, and runs in Expo Go (no custom dev build needed).
 
-1. Install dependencies
+Features
+Recipe card box: a stack of up to 9 cards in a wooden box. Long-press to fan the cards, drag to browse, and tap to pull one out into a full-screen ruled recipe card.
+Multiple recipe boxes: organise recipes into collections (e.g. "My Recipes", "Holiday Baking"). Rename a box inline and swipe between boxes with the collection arrows.
+Box / All view: switch between the 3D card box and a two-column grid of mini recipe cards.
+Add recipes four ways (from the + button):
+From gallery (multi-image, with OCR)
+Take a photo (with OCR)
+Type it out
+Record your voice (speech-to-text)
+AI recipe parsing: messy text becomes a clean card with title, cook time, servings, calories, pan size, notes, grouped ingredients and grouped steps.
+Edit mode: every field on a recipe card is editable in place.
+Local-first: everything is stored on your device with AsyncStorage. No account, no backend.
+Design
+Token	Color
+Background	
+#F7F0E6
+Dark	
+#2C1A0E
+Brown	
+#6E3D1E
+Mid	
+#9B7050
+Coral	
+#E8A090
+Coral (active)	
+#D4776A
+Cream	
+#E8DDD0
 
-   ```bash
-   npm install
-   ```
+Font: Grandstander (400) throughout. Icons: Phosphor.
 
-2. Start the app
+Tech stack
+React Native + Expo (Expo Go)
+React Native Reanimated + Gesture Handler
+react-native-svg + SVG transformer
+@expo-google-fonts/grandstander
+phosphor-react-native
+expo-blur, expo-linear-gradient
+expo-image-picker, expo-image-manipulator
+expo-audio
+@react-native-async-storage/async-storage
 
-   ```bash
-   npx expo start
-   ```
+External services:
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+OCR: OCR.space
+Speech-to-text: Groq Whisper (whisper-large-v3-turbo)
+Recipe parsing: Groq (meta-llama/llama-4-scout-17b-16e-instruct)
